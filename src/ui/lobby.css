@@ -1,0 +1,218 @@
+.lobby {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: radial-gradient(circle at 50% 35%, rgba(22, 28, 48, 0.82), rgba(5, 6, 12, 0.97));
+  overflow-y: auto;
+}
+
+.lobby__card {
+  width: min(560px, 100%);
+  padding: 32px;
+  border-radius: 22px;
+  background: rgba(12, 14, 22, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.95);
+  text-align: center;
+}
+
+.lobby__eyebrow {
+  font-size: 10.5px;
+  letter-spacing: 3.4px;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.lobby__title {
+  font-size: clamp(24px, 5vw, 34px);
+  font-weight: 800;
+  margin: 10px 0;
+  line-height: 1.15;
+}
+
+.lobby__desc {
+  font-size: 13.5px;
+  line-height: 1.7;
+  margin-bottom: 22px;
+}
+
+.lobby__field {
+  display: block;
+  text-align: left;
+  margin-bottom: 14px;
+}
+
+.lobby__label {
+  display: block;
+  font-size: 10.5px;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: 700;
+  margin-bottom: 7px;
+}
+
+.lobby__input {
+  width: 100%;
+  padding: 13px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 600;
+  outline: none;
+  transition: border-color 0.18s ease;
+}
+
+.lobby__input:focus {
+  border-color: var(--accent);
+}
+
+.lobby__input--code {
+  text-align: center;
+  letter-spacing: 8px;
+  font-size: 24px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.lobby__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px;
+  border-radius: 11px;
+  background: rgba(239, 68, 68, 0.14);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  margin-bottom: 14px;
+}
+
+.lobby__error-close {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.lobby__actions {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.lobby__btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 14px 18px;
+  border-radius: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14.5px;
+  font-weight: 700;
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+.lobby__btn small {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+
+.lobby__btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  border-color: rgba(192, 132, 252, 0.7);
+}
+
+.lobby__btn:disabled {
+  opacity: 0.55;
+}
+
+.lobby__btn--primary {
+  background: linear-gradient(90deg, #6ee7a8, #c084fc);
+  border-color: transparent;
+  color: #14161f;
+}
+
+.lobby__btn--primary small {
+  color: rgba(20, 22, 31, 0.7);
+}
+
+.lobby__btn--ghost {
+  background: transparent;
+}
+
+.lobby__join {
+  margin-bottom: 22px;
+}
+
+.lobby__join-actions {
+  display: grid;
+  grid-template-columns: 1fr 1.6fr;
+  gap: 10px;
+}
+
+.lobby__join-actions .lobby__btn {
+  flex-direction: row;
+  padding: 13px;
+  font-size: 13.5px;
+}
+
+.lobby__columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px;
+  text-align: left;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.lobby__section {
+  font-size: 10px;
+  letter-spacing: 1.8px;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 800;
+  margin-bottom: 9px;
+}
+
+.lobby__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 4px 0;
+}
+
+.lobby__rank {
+  color: #fbbf24;
+}
+
+@media (max-width: 560px) {
+  .lobby__card {
+    padding: 24px 20px;
+  }
+  .lobby__columns {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+}
