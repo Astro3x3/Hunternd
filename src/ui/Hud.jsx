@@ -52,13 +52,13 @@ export function Briefing({ onStart, online, roomCode, players = [], isHost }) {
         animate={{ scale: 1, y: 0 }}
         transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
       >
-        <div className="brief__eyebrow">Quest Briefing · Verdant Expanse</div>
+        <div className="brief__eyebrow">Hunt Briefing · Verdant Expanse</div>
         <h1 className="brief__title">
           The Hunt of <span className="gradient-text">{profile.name}</span>
         </h1>
         <p className="brief__desc">
-          Track and slay the beasts roaming the expanse. Chain your combos, roll through their
-          attacks, and spend your arts wisely. Clear the quest to earn your Guild Card.
+          A dragon roams the expanse. Chain your combos, roll through its attacks, and spend your
+          arts wisely — bring it down and something much bigger will be waiting.
         </p>
 
         {online && roomCode && (
@@ -89,17 +89,12 @@ export function Briefing({ onStart, online, roomCode, players = [], isHost }) {
         )}
 
         <div className="brief__objectives">
-          {Object.entries(MONSTERS).map(([key, monster]) => {
-            const required = key === 'jagras' ? 2 : 1
-            return (
-              <div key={key} className="brief__objective">
-                <span>
-                  {monster.name} <span style={{ color: '#fbbf24' }}>{monster.rank}</span>
-                </span>
-                <span>×{required}</span>
-              </div>
-            )
-          })}
+          <div className="brief__objective">
+            <span>
+              {MONSTERS.drake.name} <span style={{ color: '#fbbf24' }}>{MONSTERS.drake.rank}</span>
+            </span>
+            <span>×1</span>
+          </div>
         </div>
 
         <div className="brief__weapons">
@@ -367,59 +362,6 @@ function TargetBar({ engaged }) {
         </motion.div>
       )}
     </AnimatePresence>
-  )
-}
-
-/* ---------------------------- quest tracker ------------------------------ */
-
-function QuestTracker({ quest, questNumber, questTotal, chainComplete, onOpenCard }) {
-  if (chainComplete || !quest) {
-    return (
-      <div className="quest panel">
-        <div className="quest__sub">
-          Quest {questTotal}/{questTotal}
-        </div>
-        <div className="quest__title">All Hunts Complete</div>
-        <div className="quest__complete">🏆 Every quest cleared</div>
-        <button type="button" className="quest__btn" onClick={onOpenCard}>
-          Open Guild Card
-        </button>
-      </div>
-    )
-  }
-
-  return (
-    <div className="quest panel">
-      <div className="quest__sub">
-        Quest {questNumber}/{questTotal}
-      </div>
-      <div className="quest__title">{quest.title}</div>
-      {quest.blurb && <div className="quest__blurb">{quest.blurb}</div>}
-
-      {quest.objectives.map((objective) => {
-        const done = objective.killed >= objective.required
-        return (
-          <div
-            key={objective.species}
-            className={`quest__obj ${done ? 'quest__obj--done' : ''}`}
-          >
-            <span>
-              {done ? '✔ ' : '• '}
-              {objective.name}
-            </span>
-            <span className="quest__count">
-              {Math.min(objective.killed, objective.required)}/{objective.required}
-            </span>
-          </div>
-        )
-      })}
-
-      {quest.complete && (
-        <div className="quest__complete quest__complete--transient">
-          📜 Quest complete — next hunt incoming…
-        </div>
-      )}
-    </div>
   )
 }
 
@@ -843,13 +785,6 @@ export function Hud({
       <SafeZoneBadge active={snap.inSafeZone} />
       <InvulnBadge timer={snap.invulnTimer} />
       <Satchel collected={snap.collected} />
-      <QuestTracker
-        quest={snap.quest}
-        questNumber={snap.questNumber}
-        questTotal={snap.questTotal}
-        chainComplete={snap.chainComplete}
-        onOpenCard={onOpenCard}
-      />
       <Minimap snap={snap} />
       <Vitals snap={snap} />
       <WeaponRail current={snap.weapon} onSelect={onSelectWeapon} />

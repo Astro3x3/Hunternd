@@ -1,5 +1,5 @@
 import { useFrame } from '@react-three/fiber'
-import { applyMonsterSnapshot, applyRemoteHit } from '../game/gameState'
+import { applyMonsterSnapshot, applyRemoteHit, applyRemoteHurt, syncRemotePlayers } from '../game/gameState'
 
 /**
  * Bridges the simulation and the relay, once per frame:
@@ -20,6 +20,10 @@ function NetSync({ game, net }) {
     net.sendTransform(game.player, now)
 
     if (game.isHost) {
+      // Keep the AI's view of the room current so monsters can target
+      // whoever's actually nearby, not just the host.
+      syncRemotePlayers(game, net.remotePlayersRef.current)
+
       // Apply everything guests reported since the last frame.
       const pending = net.pendingHitsRef.current
       if (pending.length) {
@@ -27,6 +31,13 @@ function NetSync({ game, net }) {
         pending.length = 0
       }
       net.sendMonsters(game, now)
+
+      // Tell each guest about any damage a monster just landed on them.
+      const outgoingHurts = game.outgoingHurts
+      if (outgoingHurts.length) {
+        outgoingHurts.forEach((hurt) => net.sendHurt(hurt))
+        outgoingHurts.length = 0
+      }
     } else {
       const snapshot = net.monsterSnapshotRef.current
       if (snapshot) {
@@ -39,6 +50,13 @@ function NetSync({ game, net }) {
       if (outgoing.length) {
         outgoing.forEach((hit) => net.sendHit(hit))
         outgoing.length = 0
+      }
+
+      // Apply any damage the host says a monster just landed on us.
+      const incomingHurts = net.incomingHurtsRef.current
+      if (incomingHurts.length) {
+        incomingHurts.forEach((hurt) => applyRemoteHurt(game, hurt))
+        incomingHurts.length = 0
       }
     }
   })

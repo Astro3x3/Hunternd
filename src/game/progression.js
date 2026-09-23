@@ -3,7 +3,7 @@ import { CLASSES, DEFAULT_CLASS } from '../data/classes'
 export const MAX_LEVEL = 20
 
 /** XP awarded per kill, scaled by how dangerous the quarry is. */
-export const XP_REWARDS = { jagras: 45, raptor: 85, drake: 300 }
+export const XP_REWARDS = { drake: 300, godzilla: 900 }
 
 /** Total XP needed to advance *from* `level` to the next one. */
 export function xpToNext(level) {

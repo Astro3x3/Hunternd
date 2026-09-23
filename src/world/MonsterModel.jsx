@@ -38,6 +38,15 @@ function clipForState(state) {
   }
 }
 
+// Sketchfab GLB — "Godzilla 2024" by savounited, licensed CC-BY-4.0
+// (https://creativecommons.org/licenses/by/4.0/) — attribution required if
+// this ships publicly: credit "savounited" and link the CC-BY-4.0 licence.
+// Served the same way as the wyvern — static asset, no bundler processing.
+// The file ships with no animation clips, so GodzillaModel picks whatever
+// clip names it can find generically (see pickGodzillaClip below) and falls
+// back to a static pose if there are none at all.
+const GODZILLA_GLB_URL = '/models/godzilla_2024.glb'
+
 /* ------------------------------ shared parts ----------------------------- */
 
 // A row of spikes running along the spine, tapering toward the tail.
@@ -632,13 +641,22 @@ class GltfErrorBoundary extends Component {
   }
 }
 
+// Hoisted so the hit-flash tint doesn't allocate a new THREE.Color for every
+// material, on every monster, every frame — this runs per-monster per-frame
+// during any fight with multiple aggroed monsters, so it adds up fast.
+const HIT_FLASH_COLOR = new THREE.Color('#ff6a52')
+
 /**
  * Shared hit-flash (on taking damage) + death-fade tint, driven off whatever
  * materials a model variant has collected into `materials.current`. Used by
  * both the procedural bodies and the GLB wyvern so the two read consistently.
  */
 function useHitFlashAndFade(runtime, materials, baseColors) {
-  return (rootObject, def) => {
+  // `baseScale` is whatever scale the caller's root group is actually using
+  // (def.scale for the procedural/wyvern bodies, but an auto-fit value for
+  // Godzilla) — shrinking on death must ease from THAT, not a hardcoded
+  // def.scale, or it'd snap to the wrong size the instant a monster dies.
+  return (rootObject, baseScale) => {
     const flash = runtime.hitFlash
     const fade = runtime.dead ? Math.min(runtime.deadTimer / 3.2, 1) : 0
     materials.current.forEach((material) => {
@@ -646,7 +664,7 @@ function useHitFlashAndFade(runtime, materials, baseColors) {
       if (!baseColors.has(material)) baseColors.set(material, material.color.clone())
       const base = baseColors.get(material)
       if (flash > 0) {
-        material.color.copy(base).lerp(new THREE.Color('#ff6a52'), Math.min(1, flash * 5))
+        material.color.copy(base).lerp(HIT_FLASH_COLOR, Math.min(1, flash * 5))
       } else if (!material.color.equals(base)) {
         material.color.lerp(base, 0.22)
       }
@@ -657,7 +675,7 @@ function useHitFlashAndFade(runtime, materials, baseColors) {
     })
 
     if (runtime.dead && rootObject) {
-      rootObject.scale.setScalar(def.scale * (1 - fade * 0.28))
+      rootObject.scale.setScalar(baseScale * (1 - fade * 0.28))
     }
   }
 }
@@ -709,7 +727,7 @@ function WyvernModel({ runtime }) {
     // Slow the loop to a stop once dead rather than cutting it abruptly.
     mixer.timeScale = runtime.dead ? 0 : 1
 
-    applyTint(root.current, def)
+    applyTint(root.current, def.scale)
   })
 
   return (
@@ -722,6 +740,123 @@ function WyvernModel({ runtime }) {
 }
 
 useGLTF.preload(WYVERN_GLB_URL)
+
+/**
+ * Picks the animation clip that best matches a monster state out of whatever
+ * clip names the GLB actually ships with. Unlike the wyvern (whose clips are
+ * known and hand-mapped), we don't control the godzilla file's naming, so
+ * this matches loosely by keyword and falls back to the first clip — the
+ * model still reads fine standing idle if nothing matches.
+ */
+function pickGodzillaClip(names, state) {
+  const find = (...keywords) =>
+    names.find((name) => keywords.some((k) => name.toLowerCase().includes(k)))
+
+  switch (state) {
+    case 'chase':
+    case 'attack':
+    case 'windup':
+    case 'breath':
+    case 'breathWindup':
+      return find('walk', 'run', 'move', 'attack', 'roar') ?? names[0]
+    case 'alert':
+      return find('roar', 'alert', 'idle') ?? names[0]
+    default:
+      return find('idle', 'idol') ?? names[0]
+  }
+}
+
+/**
+ * GLB-driven Godzilla boss. Same cloning/tinting approach as `WyvernModel`
+ * (SkeletonUtils clone so each instance gets its own skeleton), but clip
+ * selection is generic since we don't control this file's clip names.
+ */
+// How tall Godzilla should actually stand in-world, in metres — this drives
+// an auto-fit scale computed from the GLB's real bounding box (see below)
+// rather than trusting a hand-tuned multiplier, because this file's raw mesh
+// units don't match the wyvern's (its source model is authored much smaller
+// than "kaiju-sized" in its own local space).
+const GODZILLA_TARGET_HEIGHT = 13
+
+function GodzillaModel({ runtime }) {
+  const { scene, animations } = useGLTF(GODZILLA_GLB_URL)
+
+  const clone = useMemo(() => SkeletonUtils.clone(scene), [scene])
+  const { actions, mixer } = useAnimations(animations, clone)
+  const clipNames = useMemo(() => Object.keys(actions), [actions])
+
+  // Auto-fit: measure the clone's actual bounding box once and derive a
+  // scale factor that makes it GODZILLA_TARGET_HEIGHT metres tall, instead of
+  // applying def.scale directly to raw (and here, tiny) mesh units.
+  //
+  // IMPORTANT: this is a SKINNED mesh. Box3.setFromObject() right after
+  // SkeletonUtils.clone() reads bone matrices that haven't been computed
+  // yet (nothing has rendered this clone or called updateMatrixWorld on a
+  // fully wired-up skeleton), so it silently produces a wrong/huge box —
+  // which is exactly what made the model render at a wild, scattered scale.
+  // Forcing updateMatrixWorld(true) first makes every bone matrix current
+  // before we measure, so the box reflects the model's real rest-pose size.
+  const { fitScale, footOffset } = useMemo(() => {
+    clone.updateMatrixWorld(true)
+    const box = new THREE.Box3().setFromObject(clone)
+    const size = box.getSize(new THREE.Vector3())
+    const height = size.y
+    if (!Number.isFinite(height) || height <= 0.001) {
+      // Bounding box still came out degenerate — bail to a neutral 1:1 scale
+      // rather than dividing by ~0 and blowing the model up to infinity.
+      return { fitScale: 1, footOffset: 0 }
+    }
+    return { fitScale: GODZILLA_TARGET_HEIGHT / height, footOffset: -box.min.y }
+  }, [clone])
+
+  const root = useRef(null)
+  const currentClip = useRef(null)
+  const materials = useRef([])
+  const baseColors = useMemo(() => new WeakMap(), [])
+  const applyTint = useHitFlashAndFade(runtime, materials, baseColors)
+
+  useFrame(() => {
+    if (materials.current.length === 0) {
+      clone.traverse((child) => {
+        if (child.material && !materials.current.includes(child.material)) {
+          materials.current.push(child.material)
+        }
+      })
+    }
+
+    if (clipNames.length > 0) {
+      const wantClip = pickGodzillaClip(clipNames, runtime.dead ? 'idle' : runtime.state)
+      if (currentClip.current !== wantClip) {
+        const next = actions[wantClip]
+        const prev = currentClip.current ? actions[currentClip.current] : null
+        if (next) {
+          next.reset().fadeIn(0.3).play()
+          if (prev && prev !== next) prev.fadeOut(0.3)
+        }
+        currentClip.current = wantClip
+      }
+      mixer.timeScale = runtime.dead ? 0 : 1
+    }
+
+    applyTint(root.current, fitScale)
+  })
+
+  return (
+    <group ref={root} scale={fitScale}>
+      <group position={[0, footOffset, 0]}>
+        <primitive object={clone} />
+      </group>
+    </group>
+  )
+}
+
+// Deliberately NOT preloaded at module scope — this file is 17MB, and eager
+// preloading here would make every player download it on app start whether
+// or not they ever reach the kaiju phase. GameScene calls this once the boss
+// phase actually begins, so the fetch only happens for hunts that get there.
+export function preloadGodzilla() {
+  useGLTF.preload(GODZILLA_GLB_URL)
+}
 
 /* ------------------------------ main model ------------------------------- */
 
@@ -736,6 +871,16 @@ function MonsterModel({ runtime }) {
       <GltfErrorBoundary fallback={<ProceduralMonsterModel runtime={runtime} />}>
         <Suspense fallback={<ProceduralMonsterModel runtime={runtime} />}>
           <WyvernModel runtime={runtime} />
+        </Suspense>
+      </GltfErrorBoundary>
+    )
+  }
+
+  if (def.model === 'godzilla') {
+    return (
+      <GltfErrorBoundary fallback={<ProceduralMonsterModel runtime={runtime} />}>
+        <Suspense fallback={<ProceduralMonsterModel runtime={runtime} />}>
+          <GodzillaModel runtime={runtime} />
         </Suspense>
       </GltfErrorBoundary>
     )
@@ -909,7 +1054,7 @@ function ProceduralMonsterModel({ runtime }) {
       if (!baseColors.has(material)) baseColors.set(material, material.color.clone())
       const base = baseColors.get(material)
       if (flash > 0) {
-        material.color.copy(base).lerp(new THREE.Color('#ff6a52'), Math.min(1, flash * 5))
+        material.color.copy(base).lerp(HIT_FLASH_COLOR, Math.min(1, flash * 5))
       } else if (!material.color.equals(base)) {
         material.color.lerp(base, 0.22)
       }

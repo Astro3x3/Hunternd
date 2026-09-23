@@ -51,7 +51,7 @@ function Game() {
   const [timeOfDay, setTimeOfDay] = useState('day')
   const [snap, setSnap] = useState(() => readSnapshot(game))
 
-  const questWasComplete = useRef(false)
+  const huntWasComplete = useRef(false)
   const damageNodesRef = useRef([])
   const nameNodesRef = useRef([])
   const gameRef = useRef(null)
@@ -65,15 +65,15 @@ function Game() {
     game.isHost = net.isHost
   }, [game, net.isHost])
 
-  // Auto-open the Guild Card once the whole three-quest chain is cleared —
-  // individual quest completions just show a transient HUD banner and roll
-  // straight into the next quest, so they shouldn't interrupt play.
+  // Auto-open the Guild Card once Godzilla — the whole hunt's finish line —
+  // actually falls.
   useEffect(() => {
-    if (snap.chainComplete && !questWasComplete.current) {
-      questWasComplete.current = true
+    const godzillaSlain = snap.monsters.some((m) => m.species === 'godzilla' && m.dead)
+    if (godzillaSlain && !huntWasComplete.current) {
+      huntWasComplete.current = true
       setTimeout(() => setCardOpen(true), 900)
     }
-  }, [snap.chainComplete])
+  }, [snap.monsters])
 
   // Persist level/XP whenever a level is earned.
   useEffect(() => {
@@ -131,7 +131,7 @@ function Game() {
       setClassId(chosen)
       setGame(fresh)
       setSnap(readSnapshot(fresh))
-      questWasComplete.current = false
+      huntWasComplete.current = false
       saveClassProgress(chosen, progress, hunterName)
       setSave(loadSave())
       setPhase('briefing')

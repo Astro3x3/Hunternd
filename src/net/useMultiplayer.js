@@ -38,6 +38,8 @@ export default function useMultiplayer() {
   const monsterSnapshotRef = useRef(null)
   // Hits reported by guests, waiting for the host to apply them.
   const pendingHitsRef = useRef([])
+  // Damage the host says landed on US specifically, waiting to be applied.
+  const incomingHurtsRef = useRef([])
   // Effects broadcast by other players.
   const remoteEffectsRef = useRef([])
 
@@ -68,6 +70,7 @@ export default function useMultiplayer() {
     remotePlayersRef.current.clear()
     monsterSnapshotRef.current = null
     pendingHitsRef.current = []
+    incomingHurtsRef.current = []
     remoteEffectsRef.current = []
   }, [])
 
@@ -228,9 +231,9 @@ export default function useMultiplayer() {
             }
 
             case 'mon': {
-              // Guests trust the host's monster + quest state.
+              // Guests trust the host's monster state.
               if (!isHostRef.current) {
-                monsterSnapshotRef.current = { monsters: message.m, quest: message.q }
+                monsterSnapshotRef.current = { monsters: message.m, rewards: message.rewards, phase: message.phase }
               }
               break
             }
@@ -238,6 +241,12 @@ export default function useMultiplayer() {
             case 'hit': {
               // Host receives a guest's hit to apply authoritatively.
               if (isHostRef.current) pendingHitsRef.current.push(message)
+              break
+            }
+
+            case 'hurt': {
+              // A monster (simulated by the host) just hit us specifically.
+              if (!isHostRef.current) incomingHurtsRef.current.push(message)
               break
             }
 
@@ -311,7 +320,7 @@ export default function useMultiplayer() {
     [rawSend],
   )
 
-  /** Host-only: broadcast monster + quest state. */
+  /** Host-only: broadcast monster state + accumulated rewards. */
   const sendMonsters = useCallback(
     (game, now) => {
       if (!isHostRef.current) return
@@ -319,8 +328,10 @@ export default function useMultiplayer() {
       lastMonstersSent.current = now
       rawSend({
         t: 'mon',
+        phase: game.phase,
         m: game.monsters.map((monster) => ({
           i: monster.id,
+          sp: monster.species,
           x: Number(monster.x.toFixed(2)),
           z: Number(monster.z.toFixed(2)),
           f: Number(monster.facing.toFixed(2)),
@@ -332,15 +343,7 @@ export default function useMultiplayer() {
           j: Number(monster.jawOpen.toFixed(2)),
           a: monster.aggro ? 1 : 0,
         })),
-        q: {
-          // Chain position so guests can rebuild the correct quest definition
-          // (title/blurb/objective list) rather than only syncing progress.
-          i: game.questIndex,
-          o: game.quest?.objectives.map((objective) => objective.killed) ?? [],
-          c: game.quest?.complete ? 1 : 0,
-          done: game.chainComplete ? 1 : 0,
-          r: game.rewards,
-        },
+        rewards: game.rewards,
       })
     },
     [rawSend],
@@ -351,6 +354,15 @@ export default function useMultiplayer() {
     (hit) => {
       if (isHostRef.current) return
       rawSend({ t: 'hit', ...hit })
+    },
+    [rawSend],
+  )
+
+  /** Host-only: tell one specific guest a monster just hit them. */
+  const sendHurt = useCallback(
+    (hurt) => {
+      if (!isHostRef.current) return
+      rawSend({ t: 'hurt', to: hurt.playerId, damage: hurt.damage, x: hurt.x, z: hurt.z })
     },
     [rawSend],
   )
@@ -389,12 +401,14 @@ export default function useMultiplayer() {
     remotePlayersRef,
     monsterSnapshotRef,
     pendingHitsRef,
+    incomingHurtsRef,
     remoteEffectsRef,
 
     // senders
     sendTransform,
     sendMonsters,
     sendHit,
+    sendHurt,
     sendEffect,
     say,
   }

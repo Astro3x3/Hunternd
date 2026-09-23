@@ -212,7 +212,7 @@ export function attachRelay(wss) {
         case 'mon': {
           const room = player.room
           if (!room || room.hostId !== player.id) return
-          broadcast(room, { t: 'mon', m: message.m, q: message.q }, player.id)
+          broadcast(room, { t: 'mon', m: message.m, rewards: message.rewards, phase: message.phase }, player.id)
           break
         }
 
@@ -233,6 +233,17 @@ export function attachRelay(wss) {
               flavour: message.flavour,
               stagger: message.stagger,
             })
+          }
+          break
+        }
+
+        // Host telling one specific guest a monster just hit them.
+        case 'hurt': {
+          const room = player.room
+          if (!room || room.hostId !== player.id) return
+          const target = room.players.get(message.to)
+          if (target) {
+            send(target.socket, { t: 'hurt', damage: message.damage, x: message.x, z: message.z })
           }
           break
         }

@@ -1,84 +1,6 @@
 // Monster roster. Drives AI tuning, the 3D model variant, and its palette.
 
 export const MONSTERS = {
-  jagras: {
-    name: 'Grass Jagras',
-    rank: '★',
-    model: 'quad',
-    palette: {
-      body: '#7fae55',
-      belly: '#d9d3a6',
-      accent: '#4d7935',
-      plate: '#5f8c3f',
-      claw: '#efe6cf',
-      eye: '#f5d24a',
-    },
-    scale: 1,
-    maxHp: 240,
-    moveSpeed: 3.4,
-    chaseSpeed: 5.3,
-    detectRange: 15,
-    loseRange: 25,
-    attackRange: 2.8,
-    hitRadius: 1.2,
-    damage: 14,
-    windup: 0.45,
-    active: 0.16,
-    recover: 0.7,
-    attackCooldown: 1.5,
-    staggerThreshold: 65,
-    staggerTime: 1.1,
-    reward: 'Jagras Hide',
-    // Attacking costs stamina. Regen while aggroed is deliberately *lower*
-    // than the spend rate, so a monster that keeps pressuring you will
-    // eventually gas out — that's the window you're meant to punish. Calm
-    // monsters recover quickly, so disengaging resets the fight.
-    stamina: { max: 100, regen: 4, calmRegen: 20, attackCost: 32, windedTime: 1.8 },
-    drops: [
-      { id: 'healthPotion', chance: 0.45 },
-      { id: 'staminaTonic', chance: 0.3 },
-      { id: 'material', chance: 1 },
-    ],
-  },
-
-  raptor: {
-    name: 'Shrike Raptor',
-    rank: '★★',
-    model: 'biped',
-    palette: {
-      body: '#8f6fc4',
-      belly: '#e6daf3',
-      accent: '#5b4287',
-      plate: '#6f56a3',
-      claw: '#fdf3d8',
-      eye: '#ffe066',
-    },
-    scale: 1,
-    maxHp: 320,
-    moveSpeed: 4.2,
-    chaseSpeed: 6.8,
-    detectRange: 18,
-    loseRange: 29,
-    attackRange: 3.0,
-    hitRadius: 1.25,
-    damage: 19,
-    windup: 0.32,
-    active: 0.14,
-    recover: 0.48,
-    attackCooldown: 1.05,
-    staggerThreshold: 75,
-    staggerTime: 0.9,
-    reward: 'Raptor Talon',
-    // Fast attacker with a shallow pool — gasses out quickly if it commits.
-    stamina: { max: 95, regen: 5, calmRegen: 22, attackCost: 24, windedTime: 1.5 },
-    drops: [
-      { id: 'healthPotion', chance: 0.5 },
-      { id: 'staminaTonic', chance: 0.4 },
-      { id: 'rageShard', chance: 0.2 },
-      { id: 'material', chance: 1 },
-    ],
-  },
-
   drake: {
     name: 'Ember Rathwyrm',
     rank: '★★★',
@@ -133,19 +55,77 @@ export const MONSTERS = {
       spread: 0.18,
     },
   },
+
+  // Final-hunt kaiju. Only ever spawned dynamically once the drake falls (see
+  // `triggerKaijuPhase` in gameState.js) — it has no entry in MONSTER_SPAWNS
+  // because it doesn't belong to the regular biome roster.
+  godzilla: {
+    name: 'Godzilla',
+    rank: '★★★★★',
+    model: 'godzilla',
+    palette: {
+      body: '#3d4a44',
+      belly: '#8fa89a',
+      accent: '#232c27',
+      plate: '#1c2420',
+      claw: '#e8e4d8',
+      eye: '#7fffb0',
+    },
+    // NOTE: `scale` no longer sizes the visual model — GodzillaModel auto-fits
+    // the GLB to a fixed 13m target height (see GODZILLA_TARGET_HEIGHT in
+    // MonsterModel.jsx), since this file's raw mesh units don't match the
+    // wyvern's. `scale` here still feeds the slay-burst VFX size below.
+    scale: 5.5,
+    // A huge pool on purpose — this is the final boss and should feel like a
+    // war of attrition, not something you burst down in one combo string.
+    maxHp: 9000,
+    moveSpeed: 3.2,
+    chaseSpeed: 5.6,
+    // detect/loseRange capped well under the map's ~40-unit half-extent
+    // rather than scaled 5x with everything else, or it'd aggro from
+    // literally anywhere on the map and never lose you.
+    detectRange: 36,
+    loseRange: 55,
+    attackRange: 18,
+    hitRadius: 8,
+    damage: 58,
+    windup: 0.7,
+    active: 0.3,
+    recover: 1.05,
+    attackCooldown: 1.9,
+    staggerThreshold: 480,
+    staggerTime: 1.6,
+    reward: 'Kaiju Dorsal Plate',
+    // Massive pool — this fight is a war of attrition, not a burst check.
+    stamina: { max: 420, regen: 8, calmRegen: 18, attackCost: 55, breathCost: 90, windedTime: 3 },
+    drops: [
+      { id: 'healthPotion', chance: 1 },
+      { id: 'healthPotion', chance: 1 },
+      { id: 'staminaTonic', chance: 0.8 },
+      { id: 'rageShard', chance: 0.9 },
+      { id: 'material', chance: 1 },
+      { id: 'material', chance: 1 },
+    ],
+    // Atomic breath: same projectile pattern as the drake's fire breath,
+    // just longer range, harder-hitting, and pricier in stamina.
+    ranged: {
+      minRange: 9,
+      maxRange: 26,
+      cooldown: 6.5,
+      windup: 1.1,
+      damage: 46,
+      speed: 20,
+      radius: 1.1,
+      life: 2.1,
+      shots: 4,
+      spread: 0.14,
+    },
+  },
 }
 
 /**
- * Dens are placed per-biome and kept well clear of the camp safe zone at
- * (0, 30) so you always get a calm approach before the first fight.
+ * The only thing roaming the map now: the dragon. Killing it is what tears
+ * down this whole terrain and drops you into the Godzilla fight (see
+ * `triggerKaijuPhase` in gameState.js).
  */
-export const MONSTER_SPAWNS = [
-  { id: 'jagras-1', species: 'jagras', den: [-6, 2], patrol: 9, biome: 'plains' },
-  { id: 'jagras-2', species: 'jagras', den: [14, 4], patrol: 8, biome: 'plains' },
-  { id: 'jagras-3', species: 'jagras', den: [-18, -14], patrol: 9, biome: 'forest' },
-  { id: 'raptor-1', species: 'raptor', den: [-24, -22], patrol: 10, biome: 'forest' },
-  { id: 'raptor-2', species: 'raptor', den: [24, -10], patrol: 10, biome: 'highlands' },
-  { id: 'raptor-3', species: 'raptor', den: [27, 19], patrol: 9, biome: 'frost' },
-  { id: 'jagras-4', species: 'jagras', den: [-27, 13], patrol: 8, biome: 'mire' },
-  { id: 'drake-1', species: 'drake', den: [-2, -33], patrol: 11, biome: 'ashen' },
-]
+export const MONSTER_SPAWNS = [{ id: 'drake-1', species: 'drake', den: [-2, -33], patrol: 11, biome: 'ashen' }]

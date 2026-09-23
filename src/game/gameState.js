@@ -4,7 +4,6 @@ import { WEAPONS } from '../data/weapons'
 import { CLASSES, DEFAULT_CLASS } from '../data/classes'
 import { deriveStats, grantXp, xpToNext, XP_REWARDS, MAX_LEVEL } from './progression'
 import { PICKUPS, PICKUP_COLLECT_RADIUS, PICKUP_LIFETIME, PICKUP_MAGNET_RADIUS } from '../data/pickups'
-import { QUEST_CHAIN, MAX_QUESTS } from '../data/quests'
 import {
   AUTO_AIM,
   MAP_BOUND,
@@ -23,17 +22,68 @@ const nextId = () => {
   return uid
 }
 
-/** Builds a fresh runtime quest (with zeroed kill counters) from the chain. */
-function makeQuestFromChain(index) {
-  const def = QUEST_CHAIN[index]
-  if (!def) return null
+/** Builds one monster's live runtime record from its species + den. */
+function makeMonsterRuntime(id, species, den, patrol, biome) {
+  const def = MONSTERS[species]
   return {
-    id: def.id,
-    title: def.title,
-    blurb: def.blurb,
-    objectives: def.objectives.map((o) => ({ ...o, killed: 0 })),
-    complete: false,
+    id,
+    species,
+    def,
+    biome,
+    x: den[0],
+    z: den[1],
+    den: { x: den[0], z: den[1] },
+    patrol,
+    facing: Math.random() * Math.PI * 2,
+    hp: def.maxHp,
+    state: 'idle',
+    stateTime: Math.random() * 2,
+    targetX: den[0],
+    targetZ: den[1],
+    attackTimer: 0,
+    rangedTimer: 2 + Math.random() * 3,
+    staggerAccum: 0,
+    hitFlash: 0,
+    jawOpen: 0,
+    aggro: false,
+    dead: false,
+    deadTimer: 0,
+    hasHitThisSwing: false,
+    shotsLeft: 0,
+    shotTimer: 0,
+    // --- enemy resource ---
+    stamina: def.stamina?.max ?? 100,
+    winded: false,
+    windedTimer: 0,
+    // --- perception ---
+    canSee: false,
+    memoryTimer: 0,
+    lastSeenX: den[0],
+    lastSeenZ: den[1],
+    // --- multiplayer targeting (see updateMonster) ---
+    targetId: 'local',
   }
+}
+
+/**
+ * Fires the instant the drake dies: spawns Godzilla right into the same map
+ * the hunt has been happening on — no teleport, no terrain swap. Only the
+ * host calls this (guests receive the new monster through the normal
+ * monster snapshot + a dedicated `phase` sync field).
+ */
+function triggerKaijuPhase(state, drake) {
+  if (state.phase === 'kaiju') return
+  state.phase = 'kaiju'
+
+  // Lands where the drake fell rather than a fixed point, so it reads as an
+  // escalation of the same fight instead of a random spawn.
+  const x = drake?.x ?? 0
+  const z = drake?.z ?? 0
+
+  state.monsters.push(makeMonsterRuntime('godzilla-1', 'godzilla', [x, z], 14, drake?.biome ?? 'ashen'))
+
+  spawnEffect(state, 'roar', x, 6, z, { scale: 6, duration: 1.4 })
+  pushEvent(state, 'kaiju', 'Godzilla emerges!', '🌊')
 }
 
 /**
@@ -102,57 +152,18 @@ export function createGameState({ classId = DEFAULT_CLASS, level = 1, xp = 0 } =
       collected: { healthPotion: 0, staminaTonic: 0, rageShard: 0, material: 0 },
     },
 
-    monsters: MONSTER_SPAWNS.map((spawn) => {
-      const def = MONSTERS[spawn.species]
-      return {
-        id: spawn.id,
-        species: spawn.species,
-        def,
-        biome: spawn.biome,
-        x: spawn.den[0],
-        z: spawn.den[1],
-        den: { x: spawn.den[0], z: spawn.den[1] },
-        patrol: spawn.patrol,
-        facing: Math.random() * Math.PI * 2,
-        hp: def.maxHp,
-        state: 'idle',
-        stateTime: Math.random() * 2,
-        targetX: spawn.den[0],
-        targetZ: spawn.den[1],
-        attackTimer: 0,
-        rangedTimer: 2 + Math.random() * 3,
-        staggerAccum: 0,
-        hitFlash: 0,
-        jawOpen: 0,
-        aggro: false,
-        dead: false,
-        deadTimer: 0,
-        hasHitThisSwing: false,
-        shotsLeft: 0,
-        shotTimer: 0,
-        // --- enemy resource ---
-        stamina: def.stamina?.max ?? 100,
-        winded: false,
-        windedTimer: 0,
-        // --- perception ---
-        canSee: false,
-        memoryTimer: 0,
-        lastSeenX: spawn.den[0],
-        lastSeenZ: spawn.den[1],
-      }
-    }),
+    monsters: MONSTER_SPAWNS.map((spawn) => makeMonsterRuntime(spawn.id, spawn.species, spawn.den, spawn.patrol, spawn.biome)),
+
+    // 'hunt' is the regular biome roster; 'kaiju' is the sealed boss arena,
+    // entered once the drake falls (see triggerKaijuPhase).
+    phase: 'hunt',
 
     projectiles: [],
     effects: [],
     damageNumbers: [],
     pickups: [],
 
-    // Sequential quest chain: one active quest at a time, up to MAX_QUESTS.
-    // `questIndex` is the chain position; `chainComplete` flags having
-    // cleared all of them. `rewards` accumulates across the whole session.
-    questIndex: 0,
-    chainComplete: false,
-    quest: makeQuestFromChain(0),
+    // Loot carved from kills across the whole session (shown on the Guild Card).
     rewards: [],
 
     lockedOnId: null,
@@ -166,6 +177,14 @@ export function createGameState({ classId = DEFAULT_CLASS, level = 1, xp = 0 } =
     isHost: true,
     online: false,
     outgoingHits: [],
+    // Snapshot of other connected hunters, refreshed each frame by NetSync
+    // from the relay's remotePlayersRef. Monster AI reads this (host only)
+    // so monsters can perceive, chase and attack ANY hunter in the room, not
+    // just whoever created the lobby. Shape per entry: { id, x, z, hp }.
+    remotePlayers: [],
+    // Host-only: damage dealt to a remote hunter, waiting to be sent to them
+    // over the relay (they apply it to their own local player on receipt).
+    outgoingHurts: [],
   }
 }
 
@@ -335,7 +354,8 @@ function inCone(ox, oz, facing, tx, tz, reach, arc, targetRadius = 0) {
 const livingMonsters = (state) => state.monsters.filter((m) => !m.dead)
 const currentWeapon = (state) => WEAPONS[state.player.weapon] ?? WEAPONS.greatsword
 const playerClass = (state) => CLASSES[state.player.classId] ?? CLASSES[DEFAULT_CLASS]
-const monsterTopY = (monster) => (monster.def.model === 'drake' ? 3.4 : 2.1)
+const monsterTopY = (monster) =>
+  monster.def.model === 'godzilla' ? 9.5 : monster.def.model === 'drake' ? 3.4 : 2.1
 
 export function distanceToSafeZone(x, z) {
   return Math.hypot(x - SAFE_ZONE.x, z - SAFE_ZONE.z)
@@ -432,26 +452,10 @@ function damageMonster(state, monster, amount, knockback, sourceX, sourceZ, flav
     state.rewards.push(monster.def.reward)
     pushEvent(state, 'slay', `${monster.def.name} slain! Carved ${monster.def.reward}.`, '🏆')
 
-    if (state.quest && !state.quest.complete) {
-      const objective = state.quest.objectives.find((o) => o.species === monster.species)
-      if (objective && objective.killed < objective.required) objective.killed += 1
+    // The dragon falling is the whole hunt's escalation point: no quest
+    // bookkeeping, it just immediately drops Godzilla into the same map.
+    if (monster.species === 'drake') triggerKaijuPhase(state, monster)
 
-      if (state.quest.objectives.every((o) => o.killed >= o.required)) {
-        state.quest.complete = true
-        pushEvent(state, 'quest', `Quest complete: ${state.quest.title.replace('Hunt: ', '')}!`, '📜')
-
-        if (state.questIndex + 1 < MAX_QUESTS) {
-          state.questIndex += 1
-          const next = makeQuestFromChain(state.questIndex)
-          state.quest = next
-          spawnEffect(state, 'newQuest', state.player.x, 0.1, state.player.z, { duration: 1.0 })
-          pushEvent(state, 'newQuest', `New quest: ${next.title.replace('Hunt: ', '')}`, '📖')
-        } else {
-          state.chainComplete = true
-          pushEvent(state, 'chainComplete', 'All quests complete! Open your Guild Card.', '🏆')
-        }
-      }
-    }
     return
   }
 
@@ -462,6 +466,61 @@ function damageMonster(state, monster, amount, knockback, sourceX, sourceZ, flav
     spawnEffect(state, 'stagger', monster.x, monsterTopY(monster), monster.z, { duration: 0.8 })
     pushEvent(state, 'stagger', `${monster.def.name} staggered!`, '💫')
   }
+}
+
+/**
+ * Every hunter a monster could plausibly go after: the local player plus
+ * whichever remote hunters NetSync has mirrored in this frame. Only the host
+ * runs monster AI, so this is what makes monsters threaten the whole party
+ * instead of just whoever created the lobby.
+ */
+function huntTargets(state) {
+  const player = state.player
+  const targets = [
+    {
+      id: 'local',
+      x: player.x,
+      z: player.z,
+      radius: PLAYER.radius,
+      reachable: player.state !== 'dead' && !player.inSafeZone,
+    },
+  ]
+  if (state.online && state.isHost) {
+    state.remotePlayers.forEach((remote) => {
+      targets.push({
+        id: remote.id,
+        x: remote.x,
+        z: remote.z,
+        radius: PLAYER.radius,
+        reachable: remote.state !== 'dead' && distanceToSafeZone(remote.x, remote.z) >= SAFE_ZONE.radius,
+      })
+    })
+  }
+  return targets
+}
+
+/** Nearest reachable hunter to a point, or null if nobody qualifies. */
+function nearestTarget(targets, x, z) {
+  let best = null
+  let bestDist = Infinity
+  targets.forEach((target) => {
+    if (!target.reachable) return
+    const dist = Math.hypot(target.x - x, target.z - z)
+    if (dist < bestDist) {
+      bestDist = dist
+      best = target
+    }
+  })
+  return best
+}
+
+/** Routes monster damage to whichever hunter it actually landed on. */
+function damageHuntTarget(state, target, amount, sourceX, sourceZ) {
+  if (target.id === 'local') {
+    damagePlayer(state, amount, sourceX, sourceZ)
+    return
+  }
+  state.outgoingHurts.push({ playerId: target.id, damage: amount, x: sourceX, z: sourceZ })
 }
 
 function damagePlayer(state, amount, sourceX, sourceZ) {
@@ -1028,8 +1087,8 @@ function updatePlayer(state, dt, input) {
 /* ----------------------------- monster tick ----------------------------- */
 
 function updateMonster(state, monster, dt) {
-  const player = state.player
   const def = monster.def
+  const targets = huntTargets(state)
 
   monster.stateTime += dt
   if (monster.hitFlash > 0) monster.hitFlash = Math.max(0, monster.hitFlash - dt)
@@ -1062,16 +1121,28 @@ function updateMonster(state, monster, dt) {
     }
   }
 
-  const distToPlayer = Math.hypot(player.x - monster.x, player.z - monster.z)
-  // Monsters won't chase into the safe zone, and lose interest if you reach it.
-  const playerReachable = player.state !== 'dead' && !player.inSafeZone
+  // Stick with whoever we're already engaged with as long as they're still
+  // reachable and visible; otherwise retarget to the nearest hunter. This
+  // keeps a fight readable (the monster doesn't flicker between targets
+  // every frame) while still letting it switch to whoever it can actually see.
+  let target = targets.find((t) => t.id === monster.targetId && t.reachable)
+  if (!target || !canPerceive(monster, target)) {
+    const nearest = nearestTarget(targets, monster.x, monster.z)
+    if (nearest && canPerceive(monster, nearest)) target = nearest
+  }
+  if (!target) target = targets.find((t) => t.id === monster.targetId) ?? targets[0]
+  monster.targetId = target.id
+
+  const distToPlayer = Math.hypot(target.x - monster.x, target.z - monster.z)
+  // Monsters won't chase into the safe zone, and lose interest if the target reaches it.
+  const playerReachable = target.reachable
 
   /* ---------------------------- perception ---------------------------- */
-  monster.canSee = playerReachable && canPerceive(monster, player)
+  monster.canSee = playerReachable && canPerceive(monster, target)
   if (monster.canSee) {
     monster.memoryTimer = VISION.memory
-    monster.lastSeenX = player.x
-    monster.lastSeenZ = player.z
+    monster.lastSeenX = target.x
+    monster.lastSeenZ = target.z
   } else if (monster.memoryTimer > 0) {
     monster.memoryTimer = Math.max(0, monster.memoryTimer - dt)
   }
@@ -1195,7 +1266,7 @@ function updateMonster(state, monster, dt) {
     }
 
     case 'alert': {
-      monster.facing += angleDelta(monster.facing, Math.atan2(player.x - monster.x, player.z - monster.z)) * Math.min(1, dt * 7)
+      monster.facing += angleDelta(monster.facing, Math.atan2(target.x - monster.x, target.z - monster.z)) * Math.min(1, dt * 7)
       if (monster.stateTime > 0.8) {
         monster.state = 'chase'
         monster.stateTime = 0
@@ -1233,7 +1304,7 @@ function updateMonster(state, monster, dt) {
         monster.winded = true
         monster.windedTimer = pool.windedTime
       } else if (monster.canSee) {
-        moveToward(player.x, player.z, def.chaseSpeed)
+        moveToward(target.x, target.z, def.chaseSpeed)
       } else {
         // Sight broken: head for where we last saw them, then give up.
         const reached = moveToward(monster.lastSeenX, monster.lastSeenZ, def.chaseSpeed * 0.85)
@@ -1261,7 +1332,7 @@ function updateMonster(state, monster, dt) {
 
     case 'breathWindup': {
       const ranged = def.ranged
-      monster.facing += angleDelta(monster.facing, Math.atan2(player.x - monster.x, player.z - monster.z)) * Math.min(1, dt * 5)
+      monster.facing += angleDelta(monster.facing, Math.atan2(target.x - monster.x, target.z - monster.z)) * Math.min(1, dt * 5)
       if (monster.stateTime >= ranged.windup) {
         monster.state = 'breath'
         monster.stateTime = 0
@@ -1318,7 +1389,7 @@ function updateMonster(state, monster, dt) {
     }
 
     case 'windup': {
-      monster.facing += angleDelta(monster.facing, Math.atan2(player.x - monster.x, player.z - monster.z)) * Math.min(1, dt * 4)
+      monster.facing += angleDelta(monster.facing, Math.atan2(target.x - monster.x, target.z - monster.z)) * Math.min(1, dt * 4)
       if (monster.stateTime >= def.windup) {
         monster.state = 'attack'
         monster.stateTime = 0
@@ -1341,9 +1412,16 @@ function updateMonster(state, monster, dt) {
         def.chaseSpeed * 0.9,
       )
       if (!monster.hasHitThisSwing) {
-        if (inCone(monster.x, monster.z, monster.facing, player.x, player.z, def.attackRange + 0.7, 1.9, PLAYER.radius)) {
+        // Re-check the cone against everyone, not just the current target —
+        // a swing should land on whichever hunter is actually standing in it.
+        const hit = targets.find(
+          (t) =>
+            t.reachable &&
+            inCone(monster.x, monster.z, monster.facing, t.x, t.z, def.attackRange + 0.7, 1.9, t.radius),
+        )
+        if (hit) {
           monster.hasHitThisSwing = true
-          damagePlayer(state, def.damage, monster.x, monster.z)
+          damageHuntTarget(state, hit, def.damage, monster.x, monster.z)
         }
       }
       if (monster.stateTime >= def.active) {
@@ -1370,8 +1448,6 @@ function updateMonster(state, monster, dt) {
 /* ---------------------------- projectile tick ---------------------------- */
 
 function updateProjectiles(state, dt) {
-  const player = state.player
-
   state.projectiles.forEach((projectile) => {
     if (projectile.dead) return
     projectile.t += dt
@@ -1424,19 +1500,24 @@ function updateProjectiles(state, dt) {
           return
         }
       }
-    } else if (player.state !== 'dead') {
+    } else {
       // Fireballs fizzle harmlessly against the safe zone boundary.
       if (distanceToSafeZone(projectile.x, projectile.z) < SAFE_ZONE.radius) {
         projectile.dead = true
         spawnEffect(state, 'wardHit', projectile.x, projectile.y, projectile.z, { duration: 0.4 })
         return
       }
-      if (Math.hypot(projectile.x - player.x, projectile.z - player.z) < projectile.radius + PLAYER.radius) {
+      // Monster-owned projectiles can hit ANY hunter in the room, not just
+      // the local one — mirrors the melee cone check in updateMonster.
+      const hit = huntTargets(state).find(
+        (t) => t.reachable && Math.hypot(projectile.x - t.x, projectile.z - t.z) < projectile.radius + t.radius,
+      )
+      if (hit) {
         projectile.dead = true
         if (projectile.kind === 'fireball') {
           spawnEffect(state, 'explosion', projectile.x, 0.4, projectile.z, { scale: 1.4, duration: 0.5 })
         }
-        damagePlayer(state, projectile.damage, projectile.x, projectile.z)
+        damageHuntTarget(state, hit, projectile.damage, projectile.x, projectile.z)
       }
     }
   })
@@ -1504,9 +1585,22 @@ function updatePickups(state, dt) {
 export function applyMonsterSnapshot(state, snapshot) {
   if (!snapshot) return
 
+  if (snapshot.phase && snapshot.phase !== state.phase) {
+    state.phase = snapshot.phase
+    if (snapshot.phase === 'kaiju') pushEvent(state, 'kaiju', 'Godzilla emerges!', '🌊')
+  }
+
   snapshot.monsters?.forEach((incoming) => {
-    const monster = state.monsters.find((m) => m.id === incoming.i)
-    if (!monster) return
+    let monster = state.monsters.find((m) => m.id === incoming.i)
+    if (!monster) {
+      // The host spawned something new (Godzilla) — guests don't run
+      // makeMonsterRuntime themselves, they just mirror it into existence at
+      // wherever the first snapshot says it is.
+      if (!MONSTERS[incoming.sp]) return
+      monster = makeMonsterRuntime(incoming.i, incoming.sp, [incoming.x, incoming.z], 14, 'ashen')
+      state.monsters.push(monster)
+      spawnEffect(state, 'roar', incoming.x, 6, incoming.z, { scale: 6, duration: 1.4 })
+    }
 
     monster.netTargetX = incoming.x
     monster.netTargetZ = incoming.z
@@ -1529,36 +1623,7 @@ export function applyMonsterSnapshot(state, snapshot) {
     monster.deadTimer = incoming.dt
   })
 
-  if (snapshot.quest) {
-    const incomingIndex = snapshot.quest.i ?? 0
-    // The host moved on to a new quest — rebuild the matching definition
-    // locally rather than trying to patch the old objectives list in place.
-    if (incomingIndex !== state.questIndex || !state.quest) {
-      state.questIndex = incomingIndex
-      state.quest = makeQuestFromChain(incomingIndex)
-      if (state.quest) {
-        pushEvent(state, 'newQuest', `New quest: ${state.quest.title.replace('Hunt: ', '')}`, '📖')
-      }
-    }
-
-    if (state.quest) {
-      snapshot.quest.o?.forEach((killed, index) => {
-        if (state.quest.objectives[index]) state.quest.objectives[index].killed = killed
-      })
-      const complete = snapshot.quest.c === 1
-      if (complete && !state.quest.complete) {
-        pushEvent(state, 'quest', `Quest complete: ${state.quest.title.replace('Hunt: ', '')}!`, '📜')
-      }
-      state.quest.complete = complete
-    }
-
-    const chainDone = snapshot.quest.done === 1
-    if (chainDone && !state.chainComplete) {
-      pushEvent(state, 'chainComplete', 'All quests complete! Open your Guild Card.', '🏆')
-    }
-    state.chainComplete = chainDone
-    if (snapshot.quest.r) state.rewards = snapshot.quest.r
-  }
+  if (snapshot.rewards) state.rewards = snapshot.rewards
 }
 
 export function applyRemoteHit(state, hit) {
@@ -1566,6 +1631,26 @@ export function applyRemoteHit(state, hit) {
   const monster = state.monsters.find((m) => m.id === hit.monsterId)
   if (!monster || monster.dead) return
   damageMonster(state, monster, hit.damage, hit.knock, hit.x, hit.z, hit.flavour ?? 'normal')
+}
+
+/**
+ * A guest receiving word from the host that a monster hit THEM specifically
+ * (see damageHuntTarget). Applied straight to the local player, same as any
+ * other source of damage.
+ */
+export function applyRemoteHurt(state, hurt) {
+  if (state.isHost) return
+  damagePlayer(state, hurt.damage, hurt.x, hurt.z)
+}
+
+/** Refreshes the host's view of who else is in the room, for monster AI. */
+export function syncRemotePlayers(state, remotePlayersMap) {
+  state.remotePlayers = [...remotePlayersMap.values()].map((remote) => ({
+    id: remote.id,
+    x: remote.x,
+    z: remote.z,
+    state: remote.state,
+  }))
 }
 
 function interpolateMonster(monster, dt) {
@@ -1707,17 +1792,7 @@ export function readSnapshot(state) {
       dead: m.dead,
       aggro: m.aggro,
     })),
-    quest: state.quest
-      ? {
-          title: state.quest.title,
-          blurb: state.quest.blurb,
-          complete: state.quest.complete,
-          objectives: state.quest.objectives.map((o) => ({ ...o, name: MONSTERS[o.species].name })),
-        }
-      : null,
-    questNumber: state.questIndex + 1,
-    questTotal: MAX_QUESTS,
-    chainComplete: state.chainComplete,
+    phase: state.phase,
     rewards: [...state.rewards],
     events: state.events.filter((event) => state.time - event.t < EVENT_TTL).slice(-4),
   }

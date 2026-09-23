@@ -6,7 +6,7 @@ import Terrain from './Terrain'
 import Camp from './Camp'
 import SafeZone from './SafeZone'
 import Hunter from './Hunter'
-import MonsterModel from './MonsterModel'
+import MonsterModel, { preloadGodzilla } from './MonsterModel'
 import Projectiles from './Projectiles'
 import Effects from './Effects'
 import DamageNumbers from './DamageNumbers'
@@ -96,7 +96,14 @@ function MonsterHealthBar({ runtime }) {
     }
   })
 
-  const height = runtime.def.model === 'drake' ? 5.2 : runtime.def.model === 'biped' ? 3.2 : 2.8
+  const height =
+    runtime.def.model === 'godzilla'
+      ? 15
+      : runtime.def.model === 'drake'
+        ? 5.2
+        : runtime.def.model === 'biped'
+          ? 3.2
+          : 2.8
 
   return (
     <group ref={group} position={[0, height, 0]}>
@@ -142,6 +149,10 @@ function GameScene({ game, input, timeOfDay, damageNodesRef, net, nameNodesRef, 
   const camState = useRef({
     pos: new THREE.Vector3(0, CAMERA.height, CAMERA.distance),
     look: new THREE.Vector3(0, 1, 0),
+    // Scratch vectors reused every frame instead of allocating new THREE.Vector3
+    // instances in the hot camera-follow path (60 allocations/sec avoided).
+    scratchDesired: new THREE.Vector3(),
+    scratchLook: new THREE.Vector3(),
   })
 
   const lighting = useMemo(() => {
@@ -187,7 +198,24 @@ function GameScene({ game, input, timeOfDay, damageNodesRef, net, nameNodesRef, 
     }
   }, [timeOfDay])
 
+  // Warm the (large) Godzilla GLB once the drake fight is clearly underway
+  // (aggroed and worn down), so it's already cached by the time the dragon
+  // actually falls — but not from the very start, so a hunt that never
+  // engages the drake never pays for a 17MB download. `game` mutates in
+  // place rather than triggering React re-renders, so this is checked from
+  // inside the frame loop (once, via the ref guard) instead of a useEffect.
+  const godzillaWarmed = useRef(false)
+
   useFrame((state, rawDelta) => {
+    if (!godzillaWarmed.current) {
+      const drake = game.monsters.find((m) => m.species === 'drake')
+      const drakeIsFalling = drake && !drake.dead && drake.hp <= drake.def.maxHp * 0.4
+      if (game.phase === 'kaiju' || drakeIsFalling) {
+        godzillaWarmed.current = true
+        preloadGodzilla()
+      }
+    }
+
     const delta = Math.min(rawDelta, 0.05)
 
     // `input.cameraAngle` is the single source of truth — mouse drag writes to
@@ -218,7 +246,7 @@ function GameScene({ game, input, timeOfDay, damageNodesRef, net, nameNodesRef, 
 
     // Mouse-wheel zoom scales both distance and height so the pitch holds.
     const zoom = input.current.cameraZoom ?? 1
-    const desired = new THREE.Vector3(
+    const desired = camState.current.scratchDesired.set(
       focusX + Math.sin(angle) * CAMERA.distance * zoom,
       CAMERA.height * zoom,
       focusZ + Math.cos(angle) * CAMERA.distance * zoom,
@@ -226,7 +254,7 @@ function GameScene({ game, input, timeOfDay, damageNodesRef, net, nameNodesRef, 
 
     const smoothing = 1 - Math.exp(-CAMERA.followLerp * delta)
     camState.current.pos.lerp(desired, smoothing)
-    camState.current.look.lerp(new THREE.Vector3(focusX, CAMERA.lookHeight, focusZ), smoothing)
+    camState.current.look.lerp(camState.current.scratchLook.set(focusX, CAMERA.lookHeight, focusZ), smoothing)
 
     const shake = game.shake
     const offsetX = shake > 0 ? (Math.random() - 0.5) * shake * 0.6 : 0
